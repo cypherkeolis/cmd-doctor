@@ -1,54 +1,131 @@
-import shutil
-import sys
-from difflib import SequenceMatcher
+import re
+from collections import Counter
 
+COMMON_COMMANDS = ['git', 'ls', 'cd', 'rm', 'cp', 'mv', 'mkdir', 'echo', 'cat', 'grep', 'find', 'sudo', 'python', 'pip', 'curl', 'wget', 'ssh', 'scp', 'tar', 'zip', 'unzip', 'chmod', 'chown', 'kill', 'ps', 'top', 'htop', 'vim', 'nano', 'less', 'head', 'tail', 'wc', 'sort', 'uniq', 'awk', 'sed', 'diff', 'patch', 'make', 'docker', 'kubectl', 'helm', 'terraform', 'ansible', 'brew', 'apt', 'yum', 'dnf', 'pacman', 'npm', 'yarn', 'pnpm', 'node', 'ruby', 'gem', 'cargo', 'rustc', 'go', 'java', 'javac', 'mvn', 'gradle', 'swift', 'xcodebuild', 'pod', 'carthage', 'spack', 'conda', 'mamba', 'nix', 'nix-shell', 'nix-env', 'nix-build', 'nix-instantiate', 'nix-store', 'nix-channel', 'nix-collect-garbage', 'nix-prefetch-url', 'nix-hash', 'nix-paths', 'nix-serve', 'nix-copy-closure', 'nix-copy', 'nix-ping', 'nix-store', 'nix-store', 'nix-store', 'nix-store', 'nix-store']
 
-def levenshtein(a, b):
-    if len(a) < len(b):
-        return levenshtein(b, a)
-    if not b:
-        return len(a)
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a):
-        curr = [i + 1]
-        for j, cb in enumerate(b):
-            curr.append(min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (ca != cb)))
-        prev = curr
-    return prev[-1]
+FLAG_PATTERNS = {
+    'git': ['--verbose', '-v', '--dry-run', '-n', '--force', '-f', '--all', '-a', '--branch', '-b', '--remote', '-r', '--upstream', '-u', '--quiet', '-q', '--no-pager', '--no-color', '--color', '--help', '-h', '--version', '-V'],
+    'ls': ['-l', '-a', '-h', '-R', '-t', '-s', '-c', '-u', '-i', '-n', '-p', '-d', '-A', '-F', '-r', '-S', '-X', '-1', '-2', '-3', '-4', '-5', '-6', '-7', '-8', '-9', '-0', '-g', '-G', '-b', '-B', '-C', '-D', '-E', '-f', '-H', '-I', '-J', '-K', '-L', '-M', '-N', '-O', '-P', '-Q', '-T', '-U', '-V', '-W', '-Y', '-Z', '--color', '--no-color', '--help', '-h', '--version', '-V'],
+}
 
+def parse_history_line(line: str) -> dict:
+    line = line.strip()
+    if not line or line.startswith('#'):
+        return {'raw': line, 'valid': False, 'command': '', 'args': []}
+    parts = line.split()
+    command = parts[0] if parts else ''
+    args = parts[1:] if len(parts) > 1 else []
+    return {'raw': line, 'valid': True, 'command': command, 'args': args}
 
-def get_installed_executables():
-    return [shutil.which(cmd) for cmd in ['ls', 'cd', 'cat', 'grep', 'find', 'rm', 'cp', 'mv', 'mkdir', 'echo', 'pwd', 'touch', 'chmod', 'chown', 'ps', 'kill', 'top', 'man', 'which', 'apt', 'pip', 'git', 'python', 'python3', 'node', 'npm', 'curl', 'wget', 'tar', 'zip', 'unzip', 'ssh', 'scp', 'rsync', 'docker', 'kubectl', 'helm', 'terraform', 'ansible', 'vim', 'nano', 'emacs', 'less', 'more', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'awk', 'sed', 'xargs', 'tee', 'tr', 'diff', 'patch', 'file', 'stat', 'du', 'df', 'free', 'uptime', 'whoami', 'id', 'groups', 'su', 'sudo', 'env', 'export', 'set', 'unset', 'alias', 'history', 'clear', 'reset', 'stty', 'tty', 'uname', 'hostname', 'ifconfig', 'ip', 'netstat', 'ss', 'ping', 'traceroute', 'nslookup', 'dig', 'host', 'route', 'arp', 'iptables', 'nftables', 'ufw', 'firewalld', 'systemctl', 'service', 'journalctl', 'dmesg', 'lsof', 'lscpu', 'lsblk', 'lsusb', 'lspci', 'lshw', 'dmidecode', 'hdparm', 'smartctl', 'iostat', 'mpstat', 'vmstat', 'pidstat', 'sar', 'perf', 'strace', 'ltrace', 'gdb', 'valgrind', 'cppcheck', 'clang-tidy', 'eslint', 'pylint', 'flake8', 'black', 'isort', 'mypy', 'pytest', 'tox', 'nox', 'poetry', 'pipenv', 'virtualenv', 'conda', 'uv', 'ruff', 'pyright', 'sphinx', 'mkdocs', 'jupyter', 'ipython', 'ipykernel', 'notebook', 'lab', 'qtconsole', 'tensorboard', 'wandb', 'mlflow', 'dvc', 'kaggle', 'colab', 'gcloud', 'aws', 'az', 'azcopy', 's3cmd', 'rclone', 'borg', 'restic', 'duplicity', 'rsnapshot', 'snap', 'flatpak', 'appimage', 'deb', 'rpm', 'pacman', 'dnf', 'yum', 'zypper', 'apk', 'opkg', 'nix', 'guix', 'brew', 'portage', 'emerge', 'xbps', 'urpmi', 'pacman', 'pacman-key', 'makepkg', 'pacman-conf', 'pacman-db', 'pacman-mirror', 'pacman-optimize', 'pacman-sysupgrade', 'pacman-upgrade', 'pacman-remove', 'pacman-query', 'pacman-search', 'pacman-install', 'pacman-build', 'pacman-keygen', 'pacman-keyring', 'pacman-mirrorlist', 'pacman-optimize', 'pacman-sysupgrade', 'pacman-upgrade', 'pacman-remove', 'pacman-query', 'pacman-search', 'pacman-install', 'pacman-build', 'pacman-keygen', 'pacman-keyring', 'pacman-mirrorlist']]
+def detect_typo(command: str) -> str:
+    if not command:
+        return ''
+    for cmd in COMMON_COMMANDS:
+        if command == cmd:
+            return ''
+        if len(command) >= 2 and (command in cmd or cmd in command):
+            return cmd
+        if len(command) >= 3:
+            for i in range(len(cmd)):
+                if command == cmd[:i] + cmd[i+1:]:
+                    return cmd
+                if command == cmd[:i] + cmd[i] + cmd[i]:
+                    return cmd
+    return ''
 
+def detect_redundant_flags(command: str, args: list) -> list:
+    redundant = []
+    if command in FLAG_PATTERNS:
+        valid_flags = FLAG_PATTERNS[command]
+        seen = set()
+        for arg in args:
+            if arg.startswith('-'):
+                if arg in seen:
+                    redundant.append(arg)
+                seen.add(arg)
+    return redundant
 
-def suggest_command(failed_cmd, executables, max_distance=3):
-    tokens = failed_cmd.split()
-    if not tokens:
-        return []
+def analyze_history(history_text: str) -> dict:
+    lines = history_text.strip().split('\n')
+    parsed = [parse_history_line(l) for l in lines]
+    valid_entries = [p for p in parsed if p['valid']]
+    typo_count = 0
+    redundant_count = 0
     suggestions = []
-    for exe in executables:
-        if not exe:
-            continue
-        exe_name = exe.split('/')[-1]
-        dist = levenshtein(tokens[0], exe_name)
-        if dist <= max_distance:
-            suggestions.append((dist, exe_name, ' '.join([exe_name] + tokens[1:])))
-    suggestions.sort(key=lambda x: x[0])
-    return [s[2] for s in suggestions[:5]]
+    for entry in valid_entries:
+        cmd = entry['command']
+        args = entry['args']
+        typo = detect_typo(cmd)
+        if typo:
+            typo_count += 1
+            suggestions.append(f"Typo: '{cmd}' -> '{typo}' in: {entry['raw']}")
+        redundant = detect_redundant_flags(cmd, args)
+        if redundant:
+            redundant_count += 1
+            suggestions.append(f"Redundant flags: {redundant} in: {entry['raw']}")
+    return {
+        'total_lines': len(lines),
+        'valid_entries': len(valid_entries),
+        'typo_count': typo_count,
+        'redundant_count': redundant_count,
+        'suggestions': suggestions
+    }
 
+def generate_report(result: dict) -> str:
+    lines = [
+        f"Total lines: {result['total_lines']}",
+        f"Valid entries: {result['valid_entries']}",
+        f"Typos found: {result['typo_count']}",
+        f"Redundant flags: {result['redundant_count']}",
+        "Suggestions:",
+    ]
+    for s in result['suggestions']:
+        lines.append(f"  - {s}")
+    return '\n'.join(lines)
 
-def main():
-    failed_cmd = "lss /home/user"
-    executables = get_installed_executables()
-    suggestions = suggest_command(failed_cmd, executables)
-    print(f"Failed command: {failed_cmd}")
-    if suggestions:
-        print("Suggestions:")
-        for s in suggestions:
-            print(f"  {s}")
-    else:
-        print("No suggestions found.")
+def test_typo_detection():
+    assert detect_typo('gitt') == 'git'
+    assert detect_typo('ls') == ''
+    assert detect_typo('cd') == ''
+    assert detect_typo('pythn') == 'python'
 
+def test_flag_redundancy():
+    assert detect_redundant_flags('git', ['--verbose', '--verbose', 'status']) == ['--verbose']
+    assert detect_redundant_flags('ls', ['-l', '-l', '-a']) == ['-l']
+    assert detect_redundant_flags('git', ['status']) == []
+    assert detect_redundant_flags('unknown', ['-x', '-x']) == []
+
+def test_parse_history_line():
+    result = parse_history_line('git status')
+    assert result['command'] == 'git'
+    assert result['args'] == ['status']
+    assert result['valid'] == True
+    result2 = parse_history_line('')
+    assert result2['valid'] == False
+    result3 = parse_history_line('# comment')
+    assert result3['valid'] == False
+
+def test_report_generation():
+    result = {
+        'total_lines': 10,
+        'valid_entries': 8,
+        'typo_count': 2,
+        'redundant_count': 1,
+        'suggestions': ['Typo: gitt -> git', 'Redundant flags: [-l]']
+    }
+    report = generate_report(result)
+    assert 'Total lines: 10' in report
+    assert 'Typos found: 2' in report
+    assert 'Redundant flags: 1' in report
+    assert 'Typo: gitt -> git' in report
 
 if __name__ == '__main__':
-    main()
+    sample_history = """git status
+gitt log
+ls -l -l
+cd /tmp
+pythn script.py
+git --verbose --verbose status
+"""
+    result = analyze_history(sample_history)
+    print(generate_report(result))
